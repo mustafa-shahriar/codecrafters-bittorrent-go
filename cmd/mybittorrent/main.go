@@ -1,63 +1,74 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
-	"unicode"
-	// bencode "github.com/jackpal/bencode-go" // Available if you need it!
 )
 
-// Ensures gofmt doesn't remove the "os" encoding/json import (feel free to remove this!)
-var _ = json.Marshal
+var (
+	annouce        string
+	length         int
+	name           string
+	pieceLength    int
+	pieceHashesStr string
+	infoHash       []byte
+)
 
-// Example:
-// - 5:hello -> hello
-// - 10:hello12345 -> hello12345
-func decodeBencode(bencodedString string) (interface{}, error) {
-	if unicode.IsDigit(rune(bencodedString[0])) {
-		var firstColonIndex int
-
-		for i := 0; i < len(bencodedString); i++ {
-			if bencodedString[i] == ':' {
-				firstColonIndex = i
-				break
-			}
-		}
-
-		lengthStr := bencodedString[:firstColonIndex]
-
-		length, err := strconv.Atoi(lengthStr)
-		if err != nil {
-			return "", err
-		}
-
-		return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], nil
-	} else {
-		return "", fmt.Errorf("Only strings are supported at the moment")
-	}
+type PeerMessage struct {
+	lengthPrefix uint32
+	id           uint8
+	index        uint32
+	begin        uint32
+	length       uint32
 }
 
 func main() {
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	fmt.Println("Logs from your program will appear here!")
 
 	command := os.Args[1]
 
 	if command == "decode" {
-		// Uncomment this block to pass the first stage
-		//
-		// bencodedValue := os.Args[2]
-		//
-		// decoded, err := decodeBencode(bencodedValue)
-		// if err != nil {
-		// 	fmt.Println(err)
-		// 	return
-		// }
-		//
-		// jsonOutput, _ := json.Marshal(decoded)
-		// fmt.Println(string(jsonOutput))
+		decode()
+	} else if command == "info" {
+		info()
+	} else if command == "peers" {
+		if err := fill(os.Args[2]); err != nil {
+			fmt.Println(err)
+			return
+		}
+		peerList, err := peers()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		for _, peer := range peerList {
+			fmt.Println(peer)
+		}
+	} else if command == "handshake" {
+		if err := fill(os.Args[2]); err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		if conn, err := handshake(os.Args[3]); err != nil {
+			conn.Close()
+		}
+	} else if command == "download_piece" {
+		if err := fill(os.Args[4]); err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		peersList, err := peers()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		fmt.Println(peersList)
+		data, _ := downloadPiece(peersList, 5, 0)
+		err = os.WriteFile(os.Args[3], data, 0644)
+		if err != nil {
+			fmt.Println(err)
+		}
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
