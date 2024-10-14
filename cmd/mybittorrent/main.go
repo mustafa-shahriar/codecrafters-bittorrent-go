@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 )
@@ -56,13 +57,17 @@ func main() {
 			fmt.Println(err)
 			return
 		}
+
 		pieceId, _ := strconv.Atoi(os.Args[5])
 		pieceHashesList := pieceHashes(pieceHashesStr, length)
-		data, _ := downloadPiece(peersList, pieceId, 0, pieceHashesList[pieceId])
+		pieceCount := int(math.Ceil(float64(length) / float64(pieceLength)))
+		data, _ := downloadPiece(peersList, pieceId, 0, pieceCount, pieceHashesList[pieceId])
 		err = os.WriteFile(os.Args[3], data, 0644)
 		if err != nil {
 			fmt.Println(err)
 		}
+	} else if command == "download" {
+		download()
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)

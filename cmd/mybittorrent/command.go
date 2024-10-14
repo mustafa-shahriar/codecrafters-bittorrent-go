@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -15,13 +14,57 @@ import (
 	"strings"
 )
 
-func downloadPiece(peerList []string, pieceId, peerIndex int, actualPieceHash string) ([]byte, error) {
-	if peerIndex == len(peerList) {
-		return nil, errors.New("no peer available")
+func download() {
+	if err := fill(os.Args[4]); err != nil {
+		fmt.Println(err)
+		return
 	}
+
+	peersList, err := peers()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	pieceHashesList := pieceHashes(pieceHashesStr, length)
+	pieceCount := int(math.Ceil(float64(length) / float64(pieceLength)))
+	data := make([]byte, 0, length)
+
+	conn, err := getUnchokedPeer(peersList, 0)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer conn.Close()
+
+	for i := 0; i < pieceCount; i++ {
+
+		pieceSize := pieceLength
+		if i == pieceCount-1 && length%pieceLength != 0 {
+			pieceSize = length % pieceLength
+		}
+		chunck, err := getPieceData(conn, pieceSize, i, pieceHashesList[i])
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		data = append(data, chunck...)
+	}
+
+	err = os.WriteFile(os.Args[3], data, 0644)
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
+func getUnchokedPeer(peerList []string, peerIndex int) (net.Conn, error) {
+	if peerIndex == len(peerList) {
+		return nil, fmt.Errorf("no peer available")
+	}
+
 	conn, err := handshake(peerList[peerIndex])
 	if err != nil {
-		return downloadPiece(peerList, pieceId, peerIndex+1, actualPieceHash)
+		return getUnchokedPeer(peerList, peerIndex+1)
 	}
 
 	buffer := make([]byte, 4)
@@ -46,35 +89,51 @@ func downloadPiece(peerList []string, pieceId, peerIndex int, actualPieceHash st
 
 	_, err = conn.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x02})
 	if err != nil {
-		fmt.Println("54", err)
+		fmt.Println(err)
 		return nil, err
 	}
 
 	buffer = make([]byte, 4)
 	_, err = conn.Read(buffer)
 	if err != nil {
-		fmt.Println("61", err)
+		fmt.Println(err)
 		return nil, err
 	}
 
 	payload = make([]byte, binary.BigEndian.Uint32(buffer))
 	_, err = conn.Read(payload)
 	if err != nil {
-		fmt.Println("68", err)
+		fmt.Println(err)
 		return nil, err
 	}
 
 	if payload[0] != 1 {
-		fmt.Println("73 -> peer chocked", payload[0])
+		fmt.Println("peer didn't Unchoke")
 		return nil, err
 	}
 
+	return conn, nil
+}
+
+func downloadPiece(peerList []string, pieceId, peerIndex, pieceCount int, actualPieceHash string) ([]byte, error) {
+
+	conn, err := getUnchokedPeer(peerList, 0)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+	defer conn.Close()
+
 	pieceSize := pieceLength
-	pieceCount := int(math.Ceil(float64(length) / float64(pieceLength)))
 	if pieceId == pieceCount-1 && length%pieceLength != 0 {
 		pieceSize = length % pieceLength
 	}
 
+	return getPieceData(conn, pieceSize, pieceId, actualPieceHash)
+
+}
+
+func getPieceData(conn net.Conn, pieceSize, pieceId int, actualPieceHash string) ([]byte, error) {
 	blockSize := 16384
 	blockCount := int(math.Ceil(float64(pieceSize) / float64(blockSize)))
 
@@ -91,20 +150,20 @@ func downloadPiece(peerList []string, pieceId, peerIndex int, actualPieceHash st
 		binary.BigEndian.PutUint32(message[9:13], uint32(i*16384))
 		binary.BigEndian.PutUint32(message[13:17], uint32(blockSize))
 
-		_, err = conn.Write(message)
+		_, err := conn.Write(message)
 		if err != nil {
 			fmt.Println(err)
 			return nil, err
 		}
 
-		buffer = make([]byte, 4)
+		buffer := make([]byte, 4)
 		_, err = conn.Read(buffer)
 		if err != nil {
 			fmt.Println(err)
 			return nil, err
 		}
 
-		payload = make([]byte, binary.BigEndian.Uint32(buffer))
+		payload := make([]byte, binary.BigEndian.Uint32(buffer))
 		_, err = io.ReadFull(conn, payload)
 		if err != nil {
 			fmt.Println(err)
@@ -122,11 +181,10 @@ func downloadPiece(peerList []string, pieceId, peerIndex int, actualPieceHash st
 
 	if pieceHashStr != actualPieceHash {
 		fmt.Println("piece Hash didn't match")
-		return nil, err
+		return nil, fmt.Errorf("piece Hash didn't match")
 	}
 
 	return data, nil
-
 }
 
 func handshake(peer string) (net.Conn, error) {
