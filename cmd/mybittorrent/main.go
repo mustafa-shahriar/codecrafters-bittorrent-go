@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"strconv"
 )
@@ -68,6 +69,9 @@ func main() {
 		}
 	} else if command == "download" {
 		download()
+	} else if command == "magnet_parse" {
+		params, _ := url.ParseQuery(os.Args[2][8:])
+		fmt.Printf("Tracker URL: %s\nInfo Hash: %s\n", params["tr"][0], params["xt"][0][9:])
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
