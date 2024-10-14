@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 var (
@@ -13,14 +14,6 @@ var (
 	pieceHashesStr string
 	infoHash       []byte
 )
-
-type PeerMessage struct {
-	lengthPrefix uint32
-	id           uint8
-	index        uint32
-	begin        uint32
-	length       uint32
-}
 
 func main() {
 
@@ -63,8 +56,9 @@ func main() {
 			fmt.Println(err)
 			return
 		}
-		fmt.Println(peersList)
-		data, _ := downloadPiece(peersList, 5, 0)
+		pieceId, _ := strconv.Atoi(os.Args[5])
+		pieceHashesList := pieceHashes(pieceHashesStr, length)
+		data, _ := downloadPiece(peersList, pieceId, 0, pieceHashesList[pieceId])
 		err = os.WriteFile(os.Args[3], data, 0644)
 		if err != nil {
 			fmt.Println(err)

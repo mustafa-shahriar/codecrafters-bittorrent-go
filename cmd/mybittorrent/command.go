@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bytes"
+	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -12,138 +12,125 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 )
 
-func downloadPiece(peerList []string, pieceId, peerIndex int) ([]byte, error) {
+func downloadPiece(peerList []string, pieceId, peerIndex int, actualPieceHash string) ([]byte, error) {
 	if peerIndex == len(peerList) {
 		return nil, errors.New("no peer available")
 	}
 	conn, err := handshake(peerList[peerIndex])
 	if err != nil {
-		return downloadPiece(peerList, pieceId, peerIndex+1)
+		return downloadPiece(peerList, pieceId, peerIndex+1, actualPieceHash)
 	}
-	return downloadPieceHelper(conn, pieceId), nil
 
-}
-
-func downloadPieceHelper(conn net.Conn, index int) []byte {
-	defer conn.Close()
-
-	// wait for the bitfield message (id = 5)
-	buf := make([]byte, 4)
-	_, err := conn.Read(buf)
+	buffer := make([]byte, 4)
+	_, err = conn.Read(buffer)
 	if err != nil {
 		fmt.Println(err)
-		return nil
+		return nil, err
 	}
 
-	peerMessage := PeerMessage{}
-	peerMessage.lengthPrefix = binary.BigEndian.Uint32(buf)
-	payloadBuf := make([]byte, peerMessage.lengthPrefix)
-	_, err = conn.Read(payloadBuf)
+	payloadLength := binary.BigEndian.Uint32(buffer)
+	payload := make([]byte, payloadLength)
+	_, err = conn.Read(payload)
 	if err != nil {
 		fmt.Println(err)
-		return nil
-	}
-	peerMessage.id = payloadBuf[0]
-
-	// fmt.Printf("Received message: %v\n", peerMessage)
-	if peerMessage.id != 5 {
-		fmt.Println("Expected bitfield message")
-		return nil
+		return nil, err
 	}
 
-	// send interested message (id = 2)
-	_, err = conn.Write([]byte{0, 0, 0, 1, 2})
+	if payload[0] != 5 {
+		fmt.Println("Expected bitfield message, got ", payload[0])
+		return nil, err
+	}
+
+	_, err = conn.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x02})
 	if err != nil {
-		fmt.Println(err)
-		return nil
+		fmt.Println("54", err)
+		return nil, err
 	}
 
-	// wait for unchoke message (id = 1)
-	buf = make([]byte, 4)
-	_, err = conn.Read(buf)
+	buffer = make([]byte, 4)
+	_, err = conn.Read(buffer)
 	if err != nil {
-		fmt.Println(err)
-		return nil
+		fmt.Println("61", err)
+		return nil, err
 	}
-	peerMessage = PeerMessage{}
-	peerMessage.lengthPrefix = binary.BigEndian.Uint32(buf)
-	payloadBuf = make([]byte, peerMessage.lengthPrefix)
-	_, err = conn.Read(payloadBuf)
+
+	payload = make([]byte, binary.BigEndian.Uint32(buffer))
+	_, err = conn.Read(payload)
 	if err != nil {
-		fmt.Println(err)
-		return nil
-	}
-	peerMessage.id = payloadBuf[0]
-
-	// fmt.Printf("Received message: %v\n", peerMessage)
-	if peerMessage.id != 1 {
-		fmt.Println(buf)
-		fmt.Println("Expected unchoke message")
-		return nil
+		fmt.Println("68", err)
+		return nil, err
 	}
 
-	// send request message (id = 6) for each block
-	// Break the piece into blocks of 16 kiB (16 * 1024 bytes) and send a request message for each block
+	if payload[0] != 1 {
+		fmt.Println("73 -> peer chocked", payload[0])
+		return nil, err
+	}
+
 	pieceSize := pieceLength
-	pieceCnt := int(math.Ceil(float64(length) / float64(pieceSize)))
-	if index == pieceCnt-1 {
+	pieceCount := int(math.Ceil(float64(length) / float64(pieceLength)))
+	if pieceId == pieceCount-1 && length%pieceLength != 0 {
 		pieceSize = length % pieceLength
 	}
-	blockSize := 16 * 1024
-	blockCnt := int(math.Ceil(float64(pieceSize) / float64(blockSize)))
-	// fmt.Printf("File Length: %d, Piece Length: %d, Piece Count: %d, Block Size: %d, Block Count: %d\n", torrent.Info.Length, torrent.Info.PieceLength, pieceCnt, blockSize, blockCnt)
-	var data []byte
-	for i := 0; i < blockCnt; i++ {
-		blockLength := blockSize
-		if i == blockCnt-1 {
-			blockLength = pieceSize - ((blockCnt - 1) * int(blockSize))
-		}
-		peerMessage := PeerMessage{
-			lengthPrefix: 13,
-			id:           6,
-			index:        uint32(index),
-			begin:        uint32(i * int(blockSize)),
-			length:       uint32(blockLength),
+
+	blockSize := 16384
+	blockCount := int(math.Ceil(float64(pieceSize) / float64(blockSize)))
+
+	data := make([]byte, 0, pieceSize)
+	for i := 0; i < blockCount; i++ {
+		if i == blockCount-1 && pieceSize%blockSize != 0 {
+			blockSize = pieceSize % blockSize
 		}
 
-		var buf bytes.Buffer
-		binary.Write(&buf, binary.BigEndian, peerMessage)
-		_, err = conn.Write(buf.Bytes())
+		message := make([]byte, 17)
+		binary.BigEndian.PutUint32(message[0:4], 13)
+		message[4] = 6
+		binary.BigEndian.PutUint32(message[5:9], uint32(pieceId))
+		binary.BigEndian.PutUint32(message[9:13], uint32(i*16384))
+		binary.BigEndian.PutUint32(message[13:17], uint32(blockSize))
+
+		_, err = conn.Write(message)
 		if err != nil {
 			fmt.Println(err)
-			return nil
+			return nil, err
 		}
-		// fmt.Println("Sent request message", peerMessage)
 
-		// wait for piece message (id = 7)
-		resBuf := make([]byte, 4)
-		_, err = conn.Read(resBuf)
+		buffer = make([]byte, 4)
+		_, err = conn.Read(buffer)
 		if err != nil {
 			fmt.Println(err)
-			return nil
+			return nil, err
 		}
 
-		peerMessage = PeerMessage{}
-		peerMessage.lengthPrefix = binary.BigEndian.Uint32(resBuf)
-		payloadBuf := make([]byte, peerMessage.lengthPrefix)
-		_, err = io.ReadFull(conn, payloadBuf)
+		payload = make([]byte, binary.BigEndian.Uint32(buffer))
+		_, err = io.ReadFull(conn, payload)
 		if err != nil {
 			fmt.Println(err)
-			return nil
+			return nil, err
 		}
-		peerMessage.id = payloadBuf[0]
-		// fmt.Printf("Received message: %v\n", peerMessage)
 
-		data = append(data, payloadBuf[9:]...)
+		data = append(data, payload[9:]...)
+
 	}
 
-	fmt.Println(data)
-	return data
+	hasher := sha1.New()
+	hasher.Write(data)
+	pieceHash := hasher.Sum(nil)
+	pieceHashStr := hex.EncodeToString(pieceHash)
+
+	if pieceHashStr != actualPieceHash {
+		fmt.Println("piece Hash didn't match")
+		return nil, err
+	}
+
+	return data, nil
+
 }
 
 func handshake(peer string) (net.Conn, error) {
+	fmt.Println("handshaking")
 	message := make([]byte, 0, 68)
 	message = append(message, byte(19))
 	message = append(message, []byte("BitTorrent protocol")...)
@@ -153,7 +140,6 @@ func handshake(peer string) (net.Conn, error) {
 
 	conn, err := net.Dial("tcp", peer)
 	if err != nil {
-		fmt.Println(err)
 		return nil, err
 	}
 
@@ -163,15 +149,10 @@ func handshake(peer string) (net.Conn, error) {
 		return nil, err
 	}
 	buf := make([]byte, 68)
-	for {
-		_, err := conn.Read(buf)
-		if err != nil && err == io.EOF {
-			break
-		}
-		if err != nil {
-			fmt.Println(err)
-			return nil, err
-		}
+	_, err = conn.Read(buf)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
 	}
 	fmt.Println("Peer ID:", hex.EncodeToString(buf[48:]))
 
@@ -213,7 +194,7 @@ func peers() ([]string, error) {
 		ip := net.IP(body[i : i+4])
 		port := binary.BigEndian.Uint16(body[i+4 : i+6])
 		peer := fmt.Sprintf("%s:%d\n", ip, port)
-		peersList = append(peersList, peer)
+		peersList = append(peersList, strings.TrimSpace(peer))
 	}
 
 	return peersList, nil
