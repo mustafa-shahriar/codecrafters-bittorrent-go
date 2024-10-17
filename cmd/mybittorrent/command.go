@@ -296,6 +296,28 @@ func magnetHandshake() {
 		fmt.Println(err)
 		return
 	}
+
+	buffer = make([]byte, 4)
+	_, err = conn.Read(buffer)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	payloadLength = binary.BigEndian.Uint32(buffer)
+	payload = make([]byte, payloadLength)
+	_, err = io.ReadFull(conn, payload)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	bencodededDict, err := decodeBencode(string(payload[2:]))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Printf("Peer Metadata Extension ID: %d\n", bencodededDict.(map[string]interface{})["m"].(map[string]interface{})["ut_metadata"].(int))
 }
 
 func peers() ([]string, error) {
