@@ -10,6 +10,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -78,7 +79,7 @@ func download() {
 }
 
 func getUnchokedPeer(peer string) (net.Conn, error) {
-	conn, err := handshake(peer)
+	conn, _, err := handshake(peer)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +204,10 @@ func getPieceData(conn net.Conn, pieceSize, pieceId int, actualPieceHash string)
 	return data, nil
 }
 
-func handshake(peer string) (net.Conn, error) {
+// handshake establishes a connection with the specified peer.
+// It returns the connection, a boolean indicating whether extensions are supported,
+// and any error encountered during the handshake process.
+func handshake(peer string) (net.Conn, bool, error) {
 	fmt.Println("handshaking")
 	message := make([]byte, 0, 68)
 	message = append(message, byte(19))
@@ -218,23 +222,80 @@ func handshake(peer string) (net.Conn, error) {
 
 	conn, err := net.Dial("tcp", peer)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	_, err = conn.Write(message)
 	if err != nil {
 		fmt.Println(err)
-		return nil, err
+		return nil, false, err
 	}
 	buf := make([]byte, 68)
-	_, err = conn.Read(buf)
+	_, err = io.ReadFull(conn, buf)
 	if err != nil {
 		fmt.Println(err)
-		return nil, err
+		return nil, false, err
 	}
 	fmt.Println("Peer ID:", hex.EncodeToString(buf[48:]))
 
-	return conn, nil
+	return conn, buf[25] == 16, nil
+}
+
+func magnetHandshake() {
+	params, _ := url.ParseQuery(os.Args[2][8:])
+	annouce = params["tr"][0]
+	length = 999
+	infoHash, _ = hex.DecodeString(params["xt"][0][9:])
+	isMagenet = true
+
+	peersList, err := peers()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	conn, extensionSupport, err := handshake(peersList[0])
+	if err == nil {
+		defer conn.Close()
+	}
+
+	if !extensionSupport {
+		return
+	}
+
+	buffer := make([]byte, 4)
+	_, err = conn.Read(buffer)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	payloadLength := binary.BigEndian.Uint32(buffer)
+	payload := make([]byte, payloadLength)
+	_, err = conn.Read(payload)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if payload[0] != 5 {
+		fmt.Println("Expected bitfield message, got ", payload[0])
+		return
+	}
+
+	extensionDict := []byte("d1:md11:ut_metadatai16eee")
+	messageLength := len(extensionDict) + 2
+	message := make([]byte, 4)
+	binary.BigEndian.PutUint32(message, uint32(messageLength))
+	message = append(message, 20)
+	message = append(message, 0)
+	message = append(message, extensionDict...)
+
+	_, err = conn.Write(message)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 }
 
 func peers() ([]string, error) {

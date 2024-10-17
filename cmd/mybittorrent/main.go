@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math"
 	"net/url"
@@ -73,7 +72,7 @@ func main() {
 			return
 		}
 
-		if conn, err := handshake(os.Args[3]); err != nil {
+		if conn, _, err := handshake(os.Args[3]); err != nil {
 			conn.Close()
 		}
 	} else if command == "download_piece" {
@@ -102,22 +101,8 @@ func main() {
 		params, _ := url.ParseQuery(os.Args[2][8:])
 		fmt.Printf("Tracker URL: %s\nInfo Hash: %s\n", params["tr"][0], params["xt"][0][9:])
 	} else if command == "magnet_handshake" {
-		//magnet:?xt=urn:btih:ad42ce8109f54c99613ce38f9b4d87e70f24a165&dn=magnet1.gif&tr=http%3A%2F%2F127.0.0.1:33319%2Fannounce
-		params, _ := url.ParseQuery(os.Args[2][8:])
-		annouce = params["tr"][0]
-		length = 999
-		infoHash, _ = hex.DecodeString(params["xt"][0][9:])
-		isMagenet = true
+		magnetHandshake()
 
-		peersList, err := peers()
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		if conn, err := handshake(peersList[0]); err == nil {
-			conn.Close()
-		}
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
