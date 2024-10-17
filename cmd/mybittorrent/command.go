@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 )
 
 func download() {
@@ -28,43 +29,58 @@ func download() {
 
 	pieceHashesList := pieceHashes(pieceHashesStr, length)
 	pieceCount := int(math.Ceil(float64(length) / float64(pieceLength)))
-	data := make([]byte, 0, length)
+	data := make([][]byte, pieceCount)
 
-	conn, err := getUnchokedPeer(peersList, 0)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer conn.Close()
-
+	var wg sync.WaitGroup
+	pieceQueue := Queue{make([]int, 0, pieceCount), sync.Mutex{}}
 	for i := 0; i < pieceCount; i++ {
-
-		pieceSize := pieceLength
-		if i == pieceCount-1 && length%pieceLength != 0 {
-			pieceSize = length % pieceLength
-		}
-		chunck, err := getPieceData(conn, pieceSize, i, pieceHashesList[i])
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		data = append(data, chunck...)
+		pieceQueue.Enqueue(i)
 	}
 
-	err = os.WriteFile(os.Args[3], data, 0644)
+	for _, peerStr := range peersList {
+		wg.Add(1)
+		go func(peer string) {
+			defer wg.Done()
+			conn, err := getUnchokedPeer(peer)
+			if err != nil {
+				return
+			}
+
+			for !pieceQueue.IsEmpty() {
+				i, _ := pieceQueue.Dequeue()
+				pieceSize := pieceLength
+				if i == pieceCount-1 && length%pieceLength != 0 {
+					pieceSize = length % pieceLength
+				}
+				chunck, err := getPieceData(conn, pieceSize, i, pieceHashesList[i])
+				if err != nil {
+					fmt.Println(err)
+					pieceQueue.Enqueue(i)
+					return
+				}
+				data[i] = chunck
+			}
+
+		}(peerStr)
+	}
+
+	wg.Wait()
+
+	finalData := make([]byte, 0, length)
+	for _, chunk := range data {
+		finalData = append(finalData, chunk...)
+	}
+
+	err = os.WriteFile(os.Args[3], finalData, 0644)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Error writing file:", err)
 	}
 }
 
-func getUnchokedPeer(peerList []string, peerIndex int) (net.Conn, error) {
-	if peerIndex == len(peerList) {
-		return nil, fmt.Errorf("no peer available")
-	}
-
-	conn, err := handshake(peerList[peerIndex])
+func getUnchokedPeer(peer string) (net.Conn, error) {
+	conn, err := handshake(peer)
 	if err != nil {
-		return getUnchokedPeer(peerList, peerIndex+1)
+		return nil, err
 	}
 
 	buffer := make([]byte, 4)
@@ -115,9 +131,9 @@ func getUnchokedPeer(peerList []string, peerIndex int) (net.Conn, error) {
 	return conn, nil
 }
 
-func downloadPiece(peerList []string, pieceId, peerIndex, pieceCount int, actualPieceHash string) ([]byte, error) {
+func downloadPiece(peerList []string, pieceId, pieceCount int, actualPieceHash string) ([]byte, error) {
 
-	conn, err := getUnchokedPeer(peerList, 0)
+	conn, err := getUnchokedPeer(peerList[0])
 	if err != nil {
 		fmt.Println(err)
 		return nil, err
@@ -192,7 +208,11 @@ func handshake(peer string) (net.Conn, error) {
 	message := make([]byte, 0, 68)
 	message = append(message, byte(19))
 	message = append(message, []byte("BitTorrent protocol")...)
-	message = append(message, make([]byte, 8)...)
+	reservedBytes := make([]byte, 8)
+	if isMagenet {
+		reservedBytes[5] = 16
+	}
+	message = append(message, reservedBytes...)
 	message = append(message, infoHash...)
 	message = append(message, []byte("00112233445566778899")...)
 
@@ -239,6 +259,7 @@ func peers() ([]string, error) {
 	}
 
 	decodedBody, err := decodeBencode(string(body))
+	fmt.Println(decodedBody)
 	if err != nil {
 		fmt.Println(err)
 		return nil, err

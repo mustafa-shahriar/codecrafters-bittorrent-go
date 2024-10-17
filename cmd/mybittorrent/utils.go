@@ -3,25 +3,10 @@ package main
 import (
 	"bytes"
 	"crypto/sha1"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"os"
 )
-
-func CreateBitfieldMessage(payload []byte, messageId int) []byte {
-	var buffer bytes.Buffer
-
-	length := uint32(len(payload) + 1)
-	binary.Write(&buffer, binary.BigEndian, length)
-
-	messageID := byte(messageId)
-	buffer.WriteByte(messageID)
-
-	buffer.Write(payload)
-
-	return buffer.Bytes()
-}
 
 func pieceHashes(sha string, pieceLength int) []string {
 	pieces := make([]string, 0, pieceLength)
