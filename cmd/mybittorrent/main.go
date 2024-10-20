@@ -9,30 +9,55 @@ import (
 	"sync"
 )
 
+type node struct {
+	val  int
+	next *node
+}
+
 type Queue struct {
-	items []int
+	head  *node
+	tail  *node
+	size  int
 	mutex sync.Mutex
 }
 
 func (q *Queue) IsEmpty() bool {
-	return len(q.items) == 0
+	return q.size == 0
 }
 
 func (q *Queue) Enqueue(item int) {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
-	q.items = append(q.items, item)
+	n := &node{item, nil}
+	if q.size == 0 {
+		q.head = n
+		q.tail = n
+	} else {
+		q.tail.next = n
+		q.tail = n
+	}
+	q.size++
 }
 
 func (q *Queue) Dequeue() (int, bool) {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
-	if len(q.items) == 0 {
+
+	if q.IsEmpty() {
 		return 0, false
 	}
-	item := q.items[0]
-	q.items = q.items[1:]
-	return item, true
+
+	n := q.head
+	if q.size == 1 {
+		q.head = nil
+		q.tail = nil
+	} else {
+		q.head = q.head.next
+		n.next = nil
+	}
+
+	q.size--
+	return n.val, true
 }
 
 var (
@@ -101,8 +126,13 @@ func main() {
 		params, _ := url.ParseQuery(os.Args[2][8:])
 		fmt.Printf("Tracker URL: %s\nInfo Hash: %s\n", params["tr"][0], params["xt"][0][9:])
 	} else if command == "magnet_handshake" {
-		magnetHandshake()
+		conn, _, _ := magnetHandshake()
+		if conn != nil {
+			conn.Close()
+		}
 
+	} else if command == "magnet_info" {
+		magnetInfo()
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
