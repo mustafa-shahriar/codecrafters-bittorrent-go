@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"net/url"
 	"os"
 	"strconv"
 	"sync"
@@ -113,7 +112,7 @@ func main() {
 		}
 
 		pieceId, _ := strconv.Atoi(os.Args[5])
-		pieceHashesList := pieceHashes(pieceHashesStr, length)
+		pieceHashesList := pieceHashes(pieceHashesStr, length, pieceLength)
 		pieceCount := int(math.Ceil(float64(length) / float64(pieceLength)))
 		data, _ := downloadPiece(peersList, pieceId, pieceCount, pieceHashesList[pieceId])
 		err = os.WriteFile(os.Args[3], data, 0644)
@@ -123,8 +122,8 @@ func main() {
 	} else if command == "download" {
 		download()
 	} else if command == "magnet_parse" {
-		params, _ := url.ParseQuery(os.Args[2][8:])
-		fmt.Printf("Tracker URL: %s\nInfo Hash: %s\n", params["tr"][0], params["xt"][0][9:])
+		tracker, magnetInfo := parseMagnet()
+		fmt.Printf("Tracker URL: %s\nInfo Hash: %s\n", tracker, magnetInfo)
 	} else if command == "magnet_handshake" {
 		conn, _, _ := magnetHandshake()
 		if conn != nil {

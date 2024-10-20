@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -28,7 +27,7 @@ func download() {
 		return
 	}
 
-	pieceHashesList := pieceHashes(pieceHashesStr, length)
+	pieceHashesList := pieceHashes(pieceHashesStr, length, pieceLength)
 	pieceCount := int(math.Ceil(float64(length) / float64(pieceLength)))
 	data := make([][]byte, pieceCount)
 
@@ -199,10 +198,7 @@ func getPieceData(conn net.Conn, pieceSize, pieceId int, actualPieceHash string)
 
 	}
 
-	hasher := sha1.New()
-	hasher.Write(data)
-	pieceHash := hasher.Sum(nil)
-	pieceHashStr := hex.EncodeToString(pieceHash)
+	pieceHashStr := hex.EncodeToString(hashBytes(data))
 
 	if pieceHashStr != actualPieceHash {
 		fmt.Println("piece Hash didn't match")
@@ -252,6 +248,11 @@ func handshake(peer string) (net.Conn, bool, error) {
 	return conn, buf[25] == 16, nil
 }
 
+func parseMagnet() (string, string) {
+	params, _ := url.ParseQuery(os.Args[2][8:])
+	return params["tr"][0], params["xt"][0][9:]
+}
+
 func magnetInfo() {
 	conn, extId, err := magnetHandshake()
 	if err != nil {
@@ -271,6 +272,62 @@ func magnetInfo() {
 		conn.Close()
 		fmt.Println(err)
 		return
+	}
+
+	buffer := make([]byte, 4)
+	_, err = conn.Read(buffer)
+	if err != nil {
+		conn.Close()
+		fmt.Println(err)
+		return
+	}
+
+	payloadLen := binary.BigEndian.Uint32(buffer)
+	buffer = make([]byte, payloadLen)
+	_, err = io.ReadFull(conn, buffer)
+	if err != nil {
+		conn.Close()
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(string(buffer[2:]))
+	fmt.Println(string(buffer))
+
+	_, n, err := decodeBencodeDict(string(buffer[2:]), 1)
+	if err != nil {
+		conn.Close()
+		fmt.Println(err)
+		return
+	}
+
+	infoDict, err := decodeBencode(string(buffer[n+3:]))
+	if err != nil {
+		conn.Close()
+		fmt.Println(err)
+		return
+	}
+	infoDictMap := infoDict.(map[string]interface{})
+
+	magnetInfoHash := hashBytes(buffer[n+3:])
+	magnetInfoHashStr := hex.EncodeToString(magnetInfoHash)
+	tracker, expectedInfoHash := parseMagnet()
+	if expectedInfoHash != magnetInfoHashStr {
+		conn.Close()
+		fmt.Println("Invalid Info provided by peer")
+		return
+	}
+
+	pieceLen := infoDictMap["piece length"].(int)
+	length := infoDictMap["length"].(int)
+
+	fmt.Printf("Tracker URL: %s\n", tracker)
+	fmt.Printf("Length: %d\n", length)
+	fmt.Printf("Info Hash: %s\n", magnetInfoHashStr)
+	fmt.Printf("Piece Length: %d\n", pieceLen)
+	fmt.Println("Piece Hashes:")
+	for _, piece := range pieceHashes(infoDictMap["pieces"].(string), length, pieceLen) {
+		fmt.Println(piece)
 	}
 }
 
@@ -428,7 +485,7 @@ func info() {
 	fmt.Printf("Info Hash: %s\n", hex.EncodeToString(infoHash))
 	fmt.Printf("Piece Length: %d\n", pieceLength)
 	fmt.Println("Piece Hashes:")
-	for _, piece := range pieceHashes(pieceHashesStr, pieceLength) {
+	for _, piece := range pieceHashes(pieceHashesStr, length, pieceLength) {
 		fmt.Println(piece)
 	}
 
