@@ -15,17 +15,7 @@ import (
 	"sync"
 )
 
-func download() {
-	if err := fill(os.Args[4]); err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	peersList, err := peers()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+func download(peersList []string) {
 
 	pieceHashesList := pieceHashes(pieceHashesStr, length, pieceLength)
 	pieceCount := int(math.Ceil(float64(length) / float64(pieceLength)))
@@ -72,7 +62,7 @@ func download() {
 		finalData = append(finalData, chunk...)
 	}
 
-	err = os.WriteFile(os.Args[3], finalData, 0644)
+	err := os.WriteFile(os.Args[3], finalData, 0644)
 	if err != nil {
 		fmt.Println("Error writing file:", err)
 	}
@@ -133,7 +123,7 @@ func getUnchokedPeer(peer string) (net.Conn, error) {
 	if payload[0] != 1 {
 		conn.Close()
 		fmt.Println("peer didn't Unchoke")
-		return nil, err
+		return nil, fmt.Errorf("peer didn't Unchoke")
 	}
 
 	return conn, nil
@@ -141,9 +131,16 @@ func getUnchokedPeer(peer string) (net.Conn, error) {
 
 func downloadPiece(peerList []string, pieceId, pieceCount int, actualPieceHash string) ([]byte, error) {
 
-	conn, err := getUnchokedPeer(peerList[0])
+	var conn net.Conn
+	var err error
+	for _, peer := range peerList {
+		conn, err = getUnchokedPeer(peer)
+		fmt.Println(peer)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
-		fmt.Println(err)
 		return nil, err
 	}
 	defer conn.Close()
@@ -248,17 +245,18 @@ func handshake(peer string) (net.Conn, bool, error) {
 	return conn, buf[25] == 16, nil
 }
 
-func parseMagnet() (string, string) {
-	params, _ := url.ParseQuery(os.Args[2][8:])
+func parseMagnet(link string) (string, string) {
+	params, _ := url.ParseQuery(link[8:])
 	return params["tr"][0], params["xt"][0][9:]
 }
 
-func magnetInfo() {
-	conn, extId, err := magnetHandshake()
+func magnetInfo(link string) error {
+	conn, extId, err := magnetHandshake(link)
 	if err != nil {
 		fmt.Println(err)
-		return
+		return err
 	}
+	defer conn.Close()
 
 	payload := []byte("d8:msg_typei0e5:piecei0ee")
 	message := make([]byte, 4, 6+len(payload))
@@ -269,26 +267,23 @@ func magnetInfo() {
 
 	_, err = conn.Write(message)
 	if err != nil {
-		conn.Close()
 		fmt.Println(err)
-		return
+		return err
 	}
 
 	buffer := make([]byte, 4)
 	_, err = conn.Read(buffer)
 	if err != nil {
-		conn.Close()
 		fmt.Println(err)
-		return
+		return err
 	}
 
 	payloadLen := binary.BigEndian.Uint32(buffer)
 	buffer = make([]byte, payloadLen)
 	_, err = io.ReadFull(conn, buffer)
 	if err != nil {
-		conn.Close()
 		fmt.Println(err)
-		return
+		return err
 	}
 
 	fmt.Println(string(buffer[2:]))
@@ -296,53 +291,55 @@ func magnetInfo() {
 
 	_, n, err := decodeBencodeDict(string(buffer[2:]), 1)
 	if err != nil {
-		conn.Close()
 		fmt.Println(err)
-		return
+		return err
 	}
 
 	infoDict, err := decodeBencode(string(buffer[n+3:]))
 	if err != nil {
-		conn.Close()
 		fmt.Println(err)
-		return
+		return err
 	}
 	infoDictMap := infoDict.(map[string]interface{})
 
-	magnetInfoHash := hashBytes(buffer[n+3:])
-	magnetInfoHashStr := hex.EncodeToString(magnetInfoHash)
-	tracker, expectedInfoHash := parseMagnet()
+	infoHash = hashBytes(buffer[n+3:])
+	magnetInfoHashStr := hex.EncodeToString(infoHash)
+	tracker, expectedInfoHash := parseMagnet(link)
 	if expectedInfoHash != magnetInfoHashStr {
-		conn.Close()
 		fmt.Println("Invalid Info provided by peer")
-		return
+		return err
 	}
 
-	pieceLen := infoDictMap["piece length"].(int)
-	length := infoDictMap["length"].(int)
+	pieceLength = infoDictMap["piece length"].(int)
+	length = infoDictMap["length"].(int)
+	annouce = tracker
+	pieceHashesStr = infoDictMap["pieces"].(string)
 
 	fmt.Printf("Tracker URL: %s\n", tracker)
 	fmt.Printf("Length: %d\n", length)
 	fmt.Printf("Info Hash: %s\n", magnetInfoHashStr)
-	fmt.Printf("Piece Length: %d\n", pieceLen)
+	fmt.Printf("Piece Length: %d\n", pieceLength)
 	fmt.Println("Piece Hashes:")
-	for _, piece := range pieceHashes(infoDictMap["pieces"].(string), length, pieceLen) {
+	for _, piece := range pieceHashes(pieceHashesStr, length, pieceLength) {
 		fmt.Println(piece)
 	}
+
+	return nil
 }
 
-func magnetHandshake() (net.Conn, int, error) {
-	params, _ := url.ParseQuery(os.Args[2][8:])
+func magnetHandshake(link string) (net.Conn, int, error) {
+	params, _ := url.ParseQuery(link[8:])
 	annouce = params["tr"][0]
 	length = 999
 	infoHash, _ = hex.DecodeString(params["xt"][0][9:])
 	isMagenet = true
 
-	peersList, err := peers()
+	peerslist, err := peers()
 	if err != nil {
 		fmt.Println(err)
 		return nil, 0, err
 	}
+	peersList = peerslist
 
 	conn, extensionSupport, err := handshake(peersList[0])
 

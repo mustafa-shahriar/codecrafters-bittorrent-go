@@ -67,6 +67,7 @@ var (
 	pieceHashesStr string
 	infoHash       []byte
 	isMagenet      bool = false
+	peersList      []string
 )
 
 func main() {
@@ -120,18 +121,54 @@ func main() {
 			fmt.Println(err)
 		}
 	} else if command == "download" {
-		download()
+
+		if err := fill(os.Args[4]); err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		peersList, err := peers()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		download(peersList)
 	} else if command == "magnet_parse" {
-		tracker, magnetInfo := parseMagnet()
+		tracker, magnetInfo := parseMagnet(os.Args[2])
 		fmt.Printf("Tracker URL: %s\nInfo Hash: %s\n", tracker, magnetInfo)
 	} else if command == "magnet_handshake" {
-		conn, _, _ := magnetHandshake()
+		conn, _, _ := magnetHandshake(os.Args[2])
 		if conn != nil {
 			conn.Close()
 		}
 
 	} else if command == "magnet_info" {
-		magnetInfo()
+		magnetInfo(os.Args[2])
+	} else if command == "magnet_download_piece" {
+		err := magnetInfo(os.Args[4])
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		isMagenet = false
+
+		pieceId, _ := strconv.Atoi(os.Args[5])
+		pieceHashesList := pieceHashes(pieceHashesStr, length, pieceLength)
+		pieceCount := int(math.Ceil(float64(length) / float64(pieceLength)))
+		data, _ := downloadPiece(peersList, pieceId, pieceCount, pieceHashesList[pieceId])
+		err = os.WriteFile(os.Args[3], data, 0644)
+		if err != nil {
+			fmt.Println(err)
+		}
+	} else if command == "magnet_download" {
+		err := magnetInfo(os.Args[4])
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		isMagenet = false
+		download(peersList)
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
